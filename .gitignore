@@ -1,0 +1,15 @@
+*.pt
+*.npz
+*.root
+*.pyc
+*build/
+dist/
+transformer.egg-info/
+*checkpoints/
+*.logs/
+*.backup/
+*data/
+*.csv
+*.tmp/
+*plots/
+*.DS_Store
