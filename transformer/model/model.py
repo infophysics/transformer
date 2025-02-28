@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import math
+from pathlib import Path
 
 from transformer.model.layers import (
     TokenEmbedding,
@@ -49,7 +50,7 @@ class EncoderBlock(nn.Module):
 
     def forward(self, X, mask):
         multi_head_output = self.multi_head_attention(X, X, X, mask)
-        normed_multi_head_output = self.multi_head_normalization(multi_head_output["O"] + X)
+        normed_multi_head_output = self.multi_head_normalization(multi_head_output + X)
         feed_forward_output = self.feed_forward(normed_multi_head_output)
         normed_feed_forward_output = self.feed_forward_normalization(
             feed_forward_output + normed_multi_head_output
@@ -130,10 +131,10 @@ class DecoderBlock(nn.Module):
     def forward(self, Y, O, X_mask, Y_mask):
         """Compute the self attention of Y"""
         self_output = self.self_attention(Y, Y, Y, Y_mask)
-        normed_self_output = self.self_normalization(self_output["O"] + Y)
+        normed_self_output = self.self_normalization(self_output + Y)
         """Compute the cross attention between X and Y"""
-        cross_output = self.cross_attention(O, O, Y, X_mask)
-        normed_cross_output = self.cross_normalization(cross_output["O"] + normed_self_output)
+        cross_output = self.cross_attention(normed_self_output, O, O, X_mask)
+        normed_cross_output = self.cross_normalization(cross_output + normed_self_output)
         """Feed to the feed forward"""
         feed_forward_output = self.feed_forward(normed_cross_output)
         normed_feed_forward_output = self.feed_forward_normalization(
@@ -220,6 +221,23 @@ class Transformer(nn.Module):
             "d_model": self.config["d_model"],
             "vocab_size": self.config["vocab_size"]
         })
+    
+    def get_weights_file_path(
+        self,
+        model_folder,
+        model_filename,
+    ):
+        return str(Path('.') / model_folder / model_filename)
+
+    # Find the latest weights file in the weights folder
+    def latest_weights_file_path(config):
+        model_folder = f"{config['datasource']}_{config['model_folder']}"
+        model_filename = f"{config['model_basename']}*"
+        weights_files = list(Path(model_folder).glob(model_filename))
+        if len(weights_files) == 0:
+            return None
+        weights_files.sort()
+        return str(weights_files[-1])
     
     def embed(self, data):
         data['source_embedding'] = self.source_embedding(data['source_tokens'])

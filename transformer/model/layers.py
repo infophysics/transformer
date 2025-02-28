@@ -91,38 +91,76 @@ class MultiHeadAttention(nn.Module):
     ):
         super().__init__()
         self.config = config
+        self.forward_views = {}
+        self.forward_view_map = {}
         self.parse_config()
+        self.register_forward_hooks()
     
     def parse_config(self):
         self.d_model = self.config["d_model"]
         self.num_heads = self.config["num_heads"]
         self.dropout = nn.Dropout(self.config["dropout"])
-        self.d_k = self.d_model / self.num_heads
+        self.d_k = self.d_model // self.num_heads
         """Check that the dimension of the embedding is divisible by the number of heads"""
         assert self.d_model % self.num_heads == 0, "d_model is not divisible by num_heads!"
 
         """Construct the weight matrices"""
-        self.W_Q = nn.Linear(self.d_model, self.d_model, bias=False)
-        self.W_K = nn.Linear(self.d_model, self.d_model, bias=False)
-        self.W_V = nn.Linear(self.d_model, self.d_model, bias=False)
-        self.W_O = nn.Linear(self.d_model, self.d_model, bias=False)
+        self.layers = nn.ModuleDict()
+        self.layers['W_Q'] = nn.Linear(self.d_model, self.d_model, bias=False)
+        self.layers['W_K'] = nn.Linear(self.d_model, self.d_model, bias=False)
+        self.layers['W_V'] = nn.Linear(self.d_model, self.d_model, bias=False)
+        self.layers['W_O'] = nn.Linear(self.d_model, self.d_model, bias=False)
+
+    
+    def forward_hook(self, m, i, o):
+        """
+        A forward hook for a particular module.
+        It assigns the output to the views dictionary.
+        """
+        self.forward_views[self.forward_view_map[m]] = o
+
+    def register_forward_hooks(self):
+        """
+        This function registers all forward hooks for the modules
+        in ModuleDict.
+        """
+        for name, module in self._modules.items():
+            if isinstance(module, nn.ModuleDict):
+                for name, layer in module.items():
+                    self.forward_view_map[layer] = name
+                    layer.register_forward_hook(self.forward_hook)
 
     @staticmethod
     def attention(Q, K, V, mask):
         """Compute QK^T"""
         d_k = Q.shape[-1]
-        A = (Q & K.transpose(-2, -1)) / math.sqrt(d_k)
+        A = (Q @ K.transpose(-2, -1)) / math.sqrt(d_k)
         """Apply the mask if there is one"""
         if mask is not None:
             A.masked_fill_(mask == 0, -1e9)
         A = A.softmax(dim=-1)
-        return A, (A & V)
+        return A, (A @ V)
+    
+    def Q(self, q):
+        return self.layers['W_Q'](q)
+    
+    def K(self, k):
+        return self.layers['W_K'](k)
+    
+    def V(self, v):
+        return self.layers['W_V'](v)
+    
+    def QK(self, q, k):
+        return self.layers['W_Q'](q) @ self.layers['W_K'](k).transpose(-2, -1)
+    
+    def OV(self, v):
+        return self.layers['W_O'](self.layers['W_V'](v))
 
     def forward(self, q, k, v, mask):
         """Find the Q, K, V, QK^T matrices"""
-        Q = self.W_Q(q)
-        K = self.W_K(k)
-        V = self.W_V(v)
+        Q = self.layers['W_Q'](q)
+        K = self.layers['W_K'](k)
+        V = self.layers['W_V'](v)
 
         """Generate separate attention head inputs"""
         Q = Q.view(
@@ -147,13 +185,7 @@ class MultiHeadAttention(nn.Module):
         )
 
         """Apply the W_O weights and return"""
-        return {
-            "Q": Q,
-            "K": K,
-            "V": V,
-            "A": A,
-            "O": self.W_O(O)
-        }
+        return self.layers['W_O'](O)
 
 
 class FeedForward(nn.Module):
